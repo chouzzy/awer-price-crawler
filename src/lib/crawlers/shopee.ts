@@ -5,15 +5,10 @@ interface ShopeeItemBasic {
   shopid: number;
   name: string;
   price: number;
-  price_min: number;
   price_before_discount: number;
   image: string;
-  item_rating?: {
-    rating_star: number;
-    rating_count: number[];
-  };
+  item_rating?: { rating_star: number; rating_count: number[] };
   historical_sold?: number;
-  sold?: number;
 }
 
 export async function crawlShopee(options: CrawlOptions): Promise<CrawlResult> {
@@ -34,40 +29,34 @@ export async function crawlShopee(options: CrawlOptions): Promise<CrawlResult> {
 
     const url = `https://shopee.com.br/api/v4/search/search_items?${params}`;
 
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-        'Accept-Language': 'pt-BR,pt;q=0.9',
-        'Referer': `https://shopee.com.br/search?keyword=${encodeURIComponent(query)}`,
-        'X-API-SOURCE': 'pc',
-        'X-Requested-With': 'XMLHttpRequest',
-        'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin',
-      },
-      signal: AbortSignal.timeout(timeout),
-    });
+    const headers: Record<string, string> = {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      Accept: 'application/json',
+      'Accept-Language': 'pt-BR,pt;q=0.9',
+      Referer: `https://shopee.com.br/search?keyword=${encodeURIComponent(query)}`,
+      'X-API-SOURCE': 'pc',
+      'X-Requested-With': 'XMLHttpRequest',
+    };
+
+    // Optional: cookie de sessão configurado via env para contornar bot detection
+    const cookie = process.env.SHOPEE_COOKIE;
+    if (cookie) headers['Cookie'] = cookie;
+
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(timeout) });
 
     if (!res.ok) {
-      throw new Error(`Shopee API HTTP ${res.status}`);
+      throw new Error(
+        `Shopee API HTTP ${res.status}${!cookie ? ' — a API da Shopee requer sessão autenticada. Configure SHOPEE_COOKIE nas variáveis de ambiente.' : ''}`
+      );
     }
 
     const json = await res.json();
-
     if (json.error && json.error !== 0) {
-      throw new Error(`Shopee API error code: ${json.error}`);
+      throw new Error(`Shopee error ${json.error}: ${json.error_msg ?? 'unknown'}`);
     }
 
     const rawItems: { item_basic: ShopeeItemBasic }[] = json?.items ?? [];
-
-    if (rawItems.length === 0 && json?.redirect_url) {
-      throw new Error('Shopee redirected — possible bot detection');
-    }
 
     const products: ProductResult[] = rawItems
       .slice(0, maxResults)
@@ -83,10 +72,6 @@ export async function crawlShopee(options: CrawlOptions): Promise<CrawlResult> {
         const totalReviews =
           item.item_rating?.rating_count?.reduce((a, b) => a + b, 0) ?? 0;
 
-        const imageUrl = item.image
-          ? `https://cf.shopee.com.br/file/${item.image}_tn`
-          : undefined;
-
         return {
           id: String(item.itemid),
           title: item.name,
@@ -94,7 +79,7 @@ export async function crawlShopee(options: CrawlOptions): Promise<CrawlResult> {
           originalPrice,
           currency: 'BRL',
           url: `https://shopee.com.br/product/${item.shopid}/${item.itemid}`,
-          imageUrl,
+          imageUrl: item.image ? `https://cf.shopee.com.br/file/${item.image}_tn` : undefined,
           source: 'shopee' as const,
           rating: item.item_rating?.rating_star,
           reviewCount: totalReviews || item.historical_sold,
@@ -102,7 +87,7 @@ export async function crawlShopee(options: CrawlOptions): Promise<CrawlResult> {
           scrapedAt: new Date(),
         };
       })
-      .filter((p): p is NonNullable<typeof p> => p !== null && p.price > 0) as ProductResult[];
+      .filter((p): p is NonNullable<typeof p> => p !== null) as ProductResult[];
 
     return { source: 'shopee', products, duration: Date.now() - start };
   } catch (error) {
