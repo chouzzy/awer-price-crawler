@@ -11,11 +11,23 @@ interface ShopeeItemBasic {
   historical_sold?: number;
 }
 
+function buildUrl(targetUrl: string): string {
+  const key = process.env.SCRAPERAPI_KEY;
+  if (!key) return targetUrl;
+  return `http://api.scraperapi.com?api_key=${key}&url=${encodeURIComponent(targetUrl)}`;
+}
+
 export async function crawlShopee(options: CrawlOptions): Promise<CrawlResult> {
   const start = Date.now();
-  const { query, maxResults = 20, timeout = 20000 } = options;
+  const { query, maxResults = 20, timeout = 30000 } = options;
 
   try {
+    if (!process.env.SCRAPERAPI_KEY) {
+      throw new Error(
+        'SCRAPERAPI_KEY não configurada. Crie uma conta gratuita em scraperapi.com e adicione a chave nas variáveis de ambiente.'
+      );
+    }
+
     const params = new URLSearchParams({
       by: 'relevancy',
       keyword: query,
@@ -27,28 +39,16 @@ export async function crawlShopee(options: CrawlOptions): Promise<CrawlResult> {
       version: '2',
     });
 
-    const url = `https://shopee.com.br/api/v4/search/search_items?${params}`;
+    const shopeeUrl = `https://shopee.com.br/api/v4/search/search_items?${params}`;
+    const url = buildUrl(shopeeUrl);
 
-    const headers: Record<string, string> = {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      Accept: 'application/json',
-      'Accept-Language': 'pt-BR,pt;q=0.9',
-      Referer: `https://shopee.com.br/search?keyword=${encodeURIComponent(query)}`,
-      'X-API-SOURCE': 'pc',
-      'X-Requested-With': 'XMLHttpRequest',
-    };
-
-    // Optional: cookie de sessão configurado via env para contornar bot detection
-    const cookie = process.env.SHOPEE_COOKIE;
-    if (cookie) headers['Cookie'] = cookie;
-
-    const res = await fetch(url, { headers, signal: AbortSignal.timeout(timeout) });
+    const res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(timeout),
+    });
 
     if (!res.ok) {
-      throw new Error(
-        `Shopee API HTTP ${res.status}${!cookie ? ' — a API da Shopee requer sessão autenticada. Configure SHOPEE_COOKIE nas variáveis de ambiente.' : ''}`
-      );
+      throw new Error(`Shopee API HTTP ${res.status}`);
     }
 
     const json = await res.json();
