@@ -25,7 +25,9 @@ export async function GET(req: NextRequest) {
   }
 
   const sources: Source[] = sourcesParam
-    ? (sourcesParam.split(',').filter((s) => ['mercadolivre', 'shopee', 'amazon'].includes(s)) as Source[])
+    ? (sourcesParam.split(',').filter((s) =>
+        ['mercadolivre', 'shopee', 'amazon'].includes(s)
+      ) as Source[])
     : ['mercadolivre', 'shopee'];
 
   if (sources.length === 0) {

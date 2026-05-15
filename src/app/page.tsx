@@ -36,7 +36,16 @@ export default function Home() {
       }
 
       if (data.products?.length === 0) {
-        setError('Nenhum produto encontrado. Tente outros termos.');
+        const errDetails = data.crawlerErrors
+          ? Object.entries(data.crawlerErrors)
+              .map(([src, msg]) => `${src}: ${msg}`)
+              .join(' | ')
+          : null;
+        setError(
+          errDetails
+            ? `Nenhum produto encontrado. Erros: ${errDetails}`
+            : 'Nenhum produto encontrado. Tente outros termos.'
+        );
         return;
       }
 

@@ -1,4 +1,4 @@
-import { CrawlOptions, PriceStats, ProductResult, SearchResult, Source } from '@/types';
+import { CrawlOptions, CrawlResult, PriceStats, ProductResult, SearchResult, Source } from '@/types';
 import { crawlMercadoLivre } from './mercadolivre';
 import { crawlShopee } from './shopee';
 
@@ -28,7 +28,7 @@ export async function crawlAll(
 ): Promise<SearchResult> {
   const start = Date.now();
 
-  const crawlers: Record<Source, (opts: CrawlOptions) => Promise<{ source: Source; products: ProductResult[]; error?: string; duration: number }>> = {
+  const crawlers: Record<Source, (opts: CrawlOptions) => Promise<CrawlResult>> = {
     mercadolivre: crawlMercadoLivre,
     shopee: crawlShopee,
     amazon: async () => ({ source: 'amazon', products: [], error: 'Not implemented', duration: 0 }),
@@ -40,11 +40,21 @@ export async function crawlAll(
 
   const allProducts: ProductResult[] = [];
   const activeSources: Source[] = [];
+  const crawlerErrors: Record<string, string> = {};
 
   for (const result of results) {
-    if (result.status === 'fulfilled' && result.value.products.length > 0) {
-      allProducts.push(...result.value.products);
-      activeSources.push(result.value.source);
+    if (result.status === 'fulfilled') {
+      const { source, products, error } = result.value;
+      if (error) {
+        crawlerErrors[source] = error;
+        console.error(`[crawler:${source}] ${error}`);
+      }
+      if (products.length > 0) {
+        allProducts.push(...products);
+        activeSources.push(source);
+      }
+    } else {
+      console.error('[crawler] Promise rejected:', result.reason);
     }
   }
 
@@ -56,5 +66,6 @@ export async function crawlAll(
     sources: activeSources,
     stats: computeStats(allProducts),
     duration: Date.now() - start,
+    crawlerErrors: Object.keys(crawlerErrors).length > 0 ? crawlerErrors : undefined,
   };
 }

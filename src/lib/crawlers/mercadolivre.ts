@@ -1,19 +1,25 @@
-import * as cheerio from 'cheerio';
 import { CrawlOptions, CrawlResult, ProductResult } from '@/types';
 
-const HEADERS = {
-  'User-Agent':
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-  'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
-  'Accept-Encoding': 'gzip, deflate, br',
-  'Cache-Control': 'no-cache',
-};
+interface MLInstallments {
+  quantity: number;
+  amount: number;
+  rate: number;
+  currency_id: string;
+}
 
-function parseMLPrice(intText: string, centsText: string): number {
-  const int = parseFloat(intText.replace(/\./g, '').trim()) || 0;
-  const cents = parseFloat(centsText.trim()) / 100 || 0;
-  return int + cents;
+interface MLResult {
+  id: string;
+  title: string;
+  price: number;
+  original_price: number | null;
+  currency_id: string;
+  permalink: string;
+  thumbnail: string;
+  condition: string;
+  available_quantity: number;
+  installments?: MLInstallments;
+  seller?: { nickname: string };
+  reviews?: { rating_average: number; total: number };
 }
 
 export async function crawlMercadoLivre(options: CrawlOptions): Promise<CrawlResult> {
@@ -21,96 +27,61 @@ export async function crawlMercadoLivre(options: CrawlOptions): Promise<CrawlRes
   const { query, maxResults = 20, timeout = 20000 } = options;
 
   try {
-    const encodedQuery = encodeURIComponent(query);
-    const url = `https://lista.mercadolivre.com.br/${encodedQuery}`;
+    const params = new URLSearchParams({
+      q: query,
+      limit: String(maxResults),
+      site_id: 'MLB',
+    });
+
+    const url = `https://api.mercadolibre.com/sites/MLB/search?${params}`;
 
     const res = await fetch(url, {
-      headers: HEADERS,
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (compatible; price-crawler/1.0)',
+      },
       signal: AbortSignal.timeout(timeout),
     });
 
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
+      throw new Error(`ML API HTTP ${res.status}: ${await res.text().catch(() => '')}`);
     }
 
-    const html = await res.text();
-    const $ = cheerio.load(html);
-    const products: ProductResult[] = [];
+    const json = await res.json();
+    const results: MLResult[] = json.results ?? [];
 
-    $('.ui-search-layout__item, .results-item').each((_, el) => {
-      if (products.length >= maxResults) return false;
+    const products: ProductResult[] = results
+      .filter((item) => item.price > 0)
+      .map((item) => {
+        const installmentText =
+          item.installments && item.installments.rate === 0
+            ? `${item.installments.quantity}x de ${item.installments.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} sem juros`
+            : item.installments
+            ? `${item.installments.quantity}x de ${item.installments.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`
+            : undefined;
 
-      const titleEl = $(el).find('.ui-search-item__title, h2.poly-box, .item__title').first();
-      const title = titleEl.text().trim();
-      if (!title) return;
+        // ML thumbnail: replace small size with larger
+        const imageUrl = item.thumbnail
+          ? item.thumbnail.replace('I.jpg', 'O.jpg').replace('-I.', '-O.')
+          : undefined;
 
-      const linkEl = $(el).find('a.ui-search-link, a.poly-component__title, .item__title a').first();
-      const href = linkEl.attr('href');
-      if (!href) return;
-      const productUrl = href.startsWith('http') ? href : `https://www.mercadolivre.com.br${href}`;
-
-      const intEl = $(el).find('.andes-money-amount__fraction, .price-tag-fraction').first();
-      const centsEl = $(el).find('.andes-money-amount__cents, .price-tag-cents').first();
-      const priceInt = intEl.text();
-      if (!priceInt) return;
-
-      const price = parseMLPrice(priceInt, centsEl.text() || '00');
-      if (!price || price <= 0) return;
-
-      const origIntEl = $(el)
-        .find('.ui-search-price__original-value .andes-money-amount__fraction')
-        .first();
-      const origCentsEl = $(el)
-        .find('.ui-search-price__original-value .andes-money-amount__cents')
-        .first();
-      const originalPrice = origIntEl.text()
-        ? parseMLPrice(origIntEl.text(), origCentsEl.text() || '00')
-        : undefined;
-
-      const imageEl = $(el).find(
-        '.ui-search-result-image__element img, .poly-component__picture img'
-      );
-      const imageUrl =
-        imageEl.attr('data-src') ?? imageEl.attr('src') ?? undefined;
-
-      const installments = $(el)
-        .find('.ui-search-installments, .poly-price__installments')
-        .first()
-        .text()
-        .trim() || undefined;
-
-      const ratingText = $(el).find('.ui-search-reviews__rating-number').text().trim();
-      const rating = ratingText ? parseFloat(ratingText) : undefined;
-
-      const reviewText = $(el)
-        .find('.ui-search-reviews__amount')
-        .text()
-        .replace(/[()]/g, '')
-        .trim();
-      const reviewCount = reviewText ? parseInt(reviewText) : undefined;
-
-      const conditionText = $(el)
-        .find('.ui-search-item__condition-tag')
-        .text()
-        .toLowerCase();
-      const condition: 'new' | 'used' = conditionText.includes('usado') ? 'used' : 'new';
-
-      products.push({
-        id: Math.random().toString(36).substring(2),
-        title,
-        price,
-        originalPrice,
-        currency: 'BRL',
-        url: productUrl,
-        imageUrl,
-        source: 'mercadolivre',
-        installments,
-        rating,
-        reviewCount,
-        condition,
-        scrapedAt: new Date(),
+        return {
+          id: item.id,
+          title: item.title,
+          price: item.price,
+          originalPrice: item.original_price ?? undefined,
+          currency: item.currency_id,
+          url: item.permalink,
+          imageUrl,
+          source: 'mercadolivre' as const,
+          seller: item.seller?.nickname,
+          rating: item.reviews?.rating_average,
+          reviewCount: item.reviews?.total,
+          installments: installmentText,
+          condition: item.condition === 'used' ? 'used' : 'new',
+          scrapedAt: new Date(),
+        };
       });
-    });
 
     return { source: 'mercadolivre', products, duration: Date.now() - start };
   } catch (error) {

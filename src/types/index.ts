@@ -24,6 +24,7 @@ export interface SearchResult {
   stats: PriceStats;
   duration: number;
   cachedAt?: Date;
+  crawlerErrors?: Record<string, string>;
 }
 
 export interface PriceStats {
